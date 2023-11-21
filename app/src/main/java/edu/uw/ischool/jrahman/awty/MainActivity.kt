@@ -1,20 +1,24 @@
 package edu.uw.ischool.jrahman.awty
 
+import android.Manifest
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.os.Bundle
+import android.telephony.SmsManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import android.util.Log
-
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 
 const val ALARM_ACTION = "ACTION_SEND_MESSAGE_ALARM"
+const val SEND_SMS_PERMISSION_REQUEST_CODE = 1
 
 class MainActivity : AppCompatActivity() {
     lateinit var messageEditText: EditText
@@ -36,12 +40,23 @@ class MainActivity : AppCompatActivity() {
         setupReceiver()
 
         startStopButton.setOnClickListener {
-            val (isValid, validationMessage) = validateInputs()
-            if (isValid) {
-                startAlarm()
+            if (startStopButton.text.toString().equals("Start", ignoreCase = true)) {
+                val (isValid, validationMessage) = validateInputs()
+                if (isValid) {
+                    startAlarm()
+                    startStopButton.text = "Stop"
+                } else {
+                    Toast.makeText(this, validationMessage, Toast.LENGTH_SHORT).show()
+                }
             } else {
-                Toast.makeText(this, validationMessage, Toast.LENGTH_SHORT).show()
+                stopAlarm()
+                startStopButton.text = "Start"
             }
+        }
+
+        if (!checkPermission(Manifest.permission.SEND_SMS)) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.SEND_SMS),
+                SEND_SMS_PERMISSION_REQUEST_CODE)
         }
     }
 
@@ -65,8 +80,12 @@ class MainActivity : AppCompatActivity() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     val message = intent?.getStringExtra("message") ?: "No message"
                     val phoneNumber = intent?.getStringExtra("phone_number") ?: "No phone number"
-                    Toast.makeText(context, "$phoneNumber: $message", Toast.LENGTH_LONG).show()
-                    Log.d("setupReceiver", "Toast displayed")
+
+                    if (checkPermission(Manifest.permission.SEND_SMS)) {
+                        sendSMS(phoneNumber, message)
+                    } else {
+                        Toast.makeText(context, "SMS Permission Required", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
@@ -74,43 +93,64 @@ class MainActivity : AppCompatActivity() {
         registerReceiver(receiver, filter)
     }
 
+    private fun sendSMS(phoneNumber: String, message: String) {
+        try {
+            val smsManager: SmsManager = SmsManager.getDefault()
+            smsManager.sendTextMessage(phoneNumber, null, message, null, null)
+            Toast.makeText(this, "Message Sent to $phoneNumber", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Failed to send message", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun startAlarm() {
         val message = messageEditText.text.toString()
         val phoneNumber = phoneNumberEditText.text.toString()
         val intervalMillis = intervalEditText.text.toString().toInt() * 60 * 1000
 
+        if (receiver == null) {
+            setupReceiver()
+        }
+
         val intent = Intent(ALARM_ACTION).apply {
             putExtra("message", message)
             putExtra("phone_number", phoneNumber)
         }
-        pendingIntent = PendingIntent.getBroadcast(this, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val localPendingIntent = PendingIntent.getBroadcast(this, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        pendingIntent = localPendingIntent
 
         alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        pendingIntent?.let {
-            alarmManager?.setInexactRepeating(
-                AlarmManager.RTC_WAKEUP,
-                System.currentTimeMillis() + intervalMillis,
-                intervalMillis.toLong(),
-                it
-            )
-        }
+        alarmManager?.setInexactRepeating(
+            AlarmManager.RTC_WAKEUP,
+            System.currentTimeMillis() + intervalMillis,
+            intervalMillis.toLong(),
+            localPendingIntent
+        )
 
         startStopButton.text = "Stop"
     }
 
     private fun stopAlarm() {
-        pendingIntent?.let {
-            alarmManager?.cancel(it)
-            it.cancel()
+        val localPendingIntent = pendingIntent
+        if (localPendingIntent != null) {
+            alarmManager?.cancel(localPendingIntent)
+            localPendingIntent.cancel()
+            pendingIntent = null
         }
-        pendingIntent = null
-
 
         receiver?.let {
             unregisterReceiver(it)
             receiver = null
         }
         startStopButton.text = "Start"
+    }
+
+    private fun checkPermission(permission: String): Boolean {
+        return ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     override fun onDestroy() {
@@ -120,4 +160,5 @@ class MainActivity : AppCompatActivity() {
         }
     }
 }
+
 
